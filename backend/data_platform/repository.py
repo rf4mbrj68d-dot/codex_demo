@@ -87,6 +87,33 @@ class DataRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_company_identity_repairs_company
                     ON company_identity_repairs(company_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS source_raw_items (
+                    source_item_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    market TEXT,
+                    company_id TEXT,
+                    external_id TEXT,
+                    title TEXT NOT NULL,
+                    source_url TEXT,
+                    publish_date TEXT,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_raw_items_company
+                    ON source_raw_items(company_id, source_type, publish_date DESC);
+                CREATE TABLE IF NOT EXISTS source_payloads (
+                    source_item_id TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    asset_path TEXT,
+                    raw_text TEXT,
+                    structured_json TEXT,
+                    fetched_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    FOREIGN KEY(source_item_id) REFERENCES source_raw_items(source_item_id)
+                );
                 """
             )
 
@@ -310,3 +337,66 @@ class DataRepository:
         item = dict(row)
         item["payload"] = json.loads(item.pop("payload_json"))
         return item
+
+    def upsert_source_item(self, item: dict, company_id: Optional[str] = None) -> dict:
+        now = utc_now()
+        source_item_id = item["source_item_id"]
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO source_raw_items(
+                    source_item_id, source_id, source_type, market, company_id, external_id,
+                    title, source_url, publish_date, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_item_id) DO UPDATE SET source_type=excluded.source_type,
+                  market=excluded.market, company_id=COALESCE(excluded.company_id, source_raw_items.company_id),
+                  external_id=excluded.external_id, title=excluded.title, source_url=excluded.source_url,
+                  publish_date=excluded.publish_date, metadata_json=excluded.metadata_json,
+                  updated_at=excluded.updated_at""",
+                (
+                    source_item_id, item["source_id"], item["source_type"], item.get("market"), company_id,
+                    item.get("external_id"), item.get("title") or "", item.get("source_url"), item.get("publish_date"),
+                    json.dumps(item, ensure_ascii=False), now, now,
+                ),
+            )
+        return item
+
+    def upsert_source_payload(self, source_item_id: str, payload: dict, expires_at: Optional[str] = None) -> dict:
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO source_payloads(
+                    source_item_id, content_hash, content_type, asset_path, raw_text, structured_json, fetched_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_item_id) DO UPDATE SET content_hash=excluded.content_hash,
+                  content_type=excluded.content_type, asset_path=excluded.asset_path, raw_text=excluded.raw_text,
+                  structured_json=excluded.structured_json, fetched_at=excluded.fetched_at, expires_at=excluded.expires_at""",
+                (
+                    source_item_id, payload["content_hash"], payload["content_type"], payload.get("asset_path"),
+                    payload.get("raw_text"), json.dumps(payload.get("structured_data") or {}, ensure_ascii=False),
+                    payload.get("fetched_at") or utc_now(), expires_at,
+                ),
+            )
+        return payload
+
+    def list_source_items(self, company_id: str, source_type: str = "", limit: int = 50) -> list[dict]:
+        sql = "SELECT metadata_json FROM source_raw_items WHERE company_id = ?"
+        params: list[Any] = [company_id]
+        if source_type:
+            sql += " AND source_type = ?"
+            params.append(source_type)
+        sql += " ORDER BY publish_date DESC, updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.store.connect() as db:
+            rows = db.execute(sql, tuple(params)).fetchall()
+        return [json.loads(row["metadata_json"]) for row in rows]
+
+    def get_source_payload(self, source_item_id: str, allow_stale: bool = True) -> Optional[dict]:
+        with self.store.connect() as db:
+            row = db.execute("SELECT * FROM source_payloads WHERE source_item_id = ?", (source_item_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if not allow_stale and data.get("expires_at") and data["expires_at"] <= utc_now():
+            return None
+        data["structured_data"] = json.loads(data.pop("structured_json") or "{}")
+        data["is_stale"] = bool(data.get("expires_at") and data["expires_at"] <= utc_now())
+        return data

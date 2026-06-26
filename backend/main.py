@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api import analysis, auth, companies, home, metrics, qa, reports, watchlists
@@ -97,6 +98,11 @@ def legacy_analyze_report(request: AnalyzeRequest):
 def legacy_qa(request: QaRequest):
     analysis_payload = request.analysis or {}
     return answer_question(request.question, analysis_payload)
+
+
+@app.get("/")
+def frontend_home():
+    return FileResponse(APP_DIR / "home.html")
 
 
 if APP_DIR.exists():

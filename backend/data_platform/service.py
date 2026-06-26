@@ -16,8 +16,11 @@ from backend.data_platform.knowledge_repository import KnowledgeRepository
 from backend.data_platform.knowledge_schema import source_authority
 from backend.data_platform.document_processor import DocumentProcessor
 from backend.data_platform.financial_quality import assess_record, fact_id
+from backend.data_platform.ingestion import IngestionService
 from backend.data_platform.repository import DataRepository, json_hash, utc_now
 from backend.data_sources.ashare_source import AShareSource
+from backend.data_sources.core import build_default_source_registry
+from backend.data_sources.hk_source import HKShareSource
 from backend.repositories.sqlite_store import SQLiteStore
 from backend.services.sec_client import SecClient, SecClientError
 
@@ -40,7 +43,15 @@ class DataService:
         self.document_processor = DocumentProcessor()
         self.sec_client = SecClient()
         self.ashare_source = AShareSource()
+        self.hk_source = HKShareSource()
         self.encyclopedia_client = EncyclopediaClient()
+        self.source_registry = build_default_source_registry(
+            self.sec_client,
+            self.ashare_source,
+            self.hk_source,
+            self.encyclopedia_client,
+        )
+        self.ingestion = IngestionService(self.source_registry, self.repository, self.knowledge, storage_dir)
 
     def search_companies(self, query: str, market: str = "ALL") -> list[dict]:
         normalized = _market(market)
@@ -50,11 +61,13 @@ class DataService:
         results = []
         if normalized in {"ALL", "US"}:
             try:
-                results.extend(self.sec_client.search_companies(query))
-            except SecClientError:
+                results.extend(self.source_registry.search_companies(query, "US"))
+            except Exception:
                 pass
         if normalized in {"ALL", "CN"}:
-            results.extend(self.ashare_source.search_companies(query))
+            results.extend(self.source_registry.search_companies(query, "CN"))
+        if normalized in {"ALL", "HK"}:
+            results.extend(self.source_registry.search_companies(query, "HK"))
         return self._complete_company_results(results)
 
     def resolve_company(self, ticker_or_name: str, market: str = "US", force: bool = False, repair_incomplete: bool = True) -> dict:
@@ -66,16 +79,20 @@ class DataService:
             if cached:
                 return self.ensure_complete_company(cached, repair_incomplete=repair_incomplete)
         if normalized == "CN":
-            return self._remember_company(_normalize_company(self.ashare_source.resolve_company(ticker_or_name)))
-        return self._remember_company(_verified_company(_normalize_company(self.sec_client.resolve_company(ticker_or_name))))
+            return self._remember_company(_verified_company(_normalize_company(self.source_registry.resolve_company(ticker_or_name, "CN"))))
+        if normalized == "HK":
+            return self._remember_company(_verified_company(_normalize_company(self.source_registry.resolve_company(ticker_or_name, "HK"))))
+        return self._remember_company(_verified_company(_normalize_company(self.source_registry.resolve_company(ticker_or_name, "US"))))
 
     def top_companies(self, market: str = "ALL") -> list[dict]:
         results = []
         normalized = _market(market)
         if normalized in {"ALL", "US"}:
-            results.extend(_local_top_us())
+            results.extend(self.source_registry.top_companies("US", limit=80))
         if normalized in {"ALL", "CN"}:
-            results.extend(self.ashare_source.top_companies(limit=80))
+            results.extend(self.source_registry.top_companies("CN", limit=80))
+        if normalized in {"ALL", "HK"}:
+            results.extend(self.source_registry.top_companies("HK", limit=80))
         return self._complete_company_results(results)
 
     def list_report_options(self, company: dict, force: bool = False) -> dict:
@@ -85,8 +102,13 @@ class DataService:
         # remaining a valid, user-selectable disclosure document.
         if company["market"] == "CN":
             reports = self.list_disclosure_reports(company, force=force)
-            annual = [item["period"] for item in reports if item.get("report_type") == "annual"]
-            quarterly = [item["period"] for item in reports if item.get("report_type") == "quarterly"]
+            annual = _unique_periods([item["period"] for item in reports if item.get("report_type") == "annual"])
+            quarterly = _unique_periods([item["period"] for item in reports if item.get("report_type") == "quarterly"])
+            return {"annual": annual, "quarterly": quarterly, "reports": reports}
+        if company["market"] == "HK":
+            reports = self.list_disclosure_reports(company, force=force)
+            annual = _unique_periods([item["period"] for item in reports if item.get("report_type") == "annual"])
+            quarterly = _unique_periods([item["period"] for item in reports if item.get("report_type") == "quarterly"])
             return {"annual": annual, "quarterly": quarterly, "reports": reports}
         dataset = self.get_financial_dataset(company, period_type="annual", force=force)
         records = dataset.get("records", {})
@@ -98,10 +120,11 @@ class DataService:
         existing = [] if force else self.repository.list_documents(company["id"], {"annual", "quarterly"})
         if existing:
             return existing
-        reports = self.ashare_source.list_reports(company)
+        reports = self.ingestion.ingest_documents(company, "filing", limit=80)
         expiry = _expiry(DOCUMENT_INDEX_TTL)
         for report in reports:
-            report.update({"market": "CN", "source_platform": "CNINFO", "index_expires_at": expiry})
+            source_platform = report.get("source_platform") or ("HKEX" if company["market"] == "HK" else "CNINFO")
+            report.update({"market": company["market"], "source_platform": source_platform, "index_expires_at": expiry})
             self.repository.upsert_document(report, expires_at=expiry)
             self._sync_canonical_document(report)
         return self.repository.list_documents(company["id"], {"annual", "quarterly"})
@@ -123,10 +146,7 @@ class DataService:
             if not requested or requested.issubset(available):
                 self._persist_financial_facts(company, dataset)
                 return self._validated_dataset(company, dataset)
-        if company["market"] == "CN":
-            fresh = self.ashare_source.fetch_financial_dataset(company, periods=periods, period_type=period_type)
-        else:
-            fresh = self.sec_client.fetch_financial_dataset(company["cik"])
+        fresh = self.source_registry.fetch_financial_dataset(company, periods=periods, period_type=period_type)
         if cached:
             fresh = _merge_dataset(cached["payload"], fresh)
         self.repository.save_snapshot("financial_dataset", key, fresh, company_id=key, source_version="financial_parser_v1")
@@ -158,14 +178,10 @@ class DataService:
         if cached:
             document["content_hash"] = cached["content_hash"]
             return str(cached["payload"].get("text", ""))
-        if document.get("market") == "US" or document.get("source_platform") == "SEC EDGAR":
-            raw_content = self.sec_client.download_filing_html(document["source_url"])
-            text = self.sec_client.extract_filing_text_from_html(raw_content)
-            extension = ".html"
-        else:
-            raw_content = self.ashare_source.cninfo.download_pdf(document["source_url"])
-            text = self.ashare_source.cninfo.extract_pdf_text_from_bytes(raw_content)
-            extension = ".pdf"
+        source_payload = self.ingestion.fetch_document_payload(document, force=force)
+        raw_content = source_payload.raw_bytes or (source_payload.raw_text or "").encode("utf-8")
+        text = source_payload.raw_text or ""
+        extension = _extension_for_content_type(source_payload.content_type)
         content_hash = hashlib.sha256(raw_content).hexdigest()
         asset_path = self._write_asset("documents", key, raw_content, extension)
         payload = {"text": text, "asset_path": str(asset_path.relative_to(self.storage_dir)), "raw_sha256": content_hash}
@@ -210,7 +226,11 @@ class DataService:
             if context:
                 self._materialize_encyclopedia(company, context)
             return context
-        context = self.encyclopedia_client.fetch_company_context(company)
+        context = None
+        for adapter in self.source_registry.find(company.get("market", "ALL"), "encyclopedia", "fetch_encyclopedia"):
+            if hasattr(adapter, "fetch_encyclopedia"):
+                context = adapter.fetch_encyclopedia(company)
+                break
         payload = {"context": context}
         self.repository.save_snapshot("encyclopedia", key, payload, company_id=key, source_version="encyclopedia_v1", expires_at=_expiry(ENCYCLOPEDIA_TTL))
         if context:
@@ -257,10 +277,27 @@ class DataService:
             }
         documents = self.repository.list_documents(company["id"])
         resources["documents"] = {"status": "ready" if documents else "missing", "count": len(documents)}
+        ratings = self.knowledge.list_rating_facts(company["id"], limit=20)
+        bonds = self.knowledge.list_bond_facts(company["id"], limit=20)
+        credit_events = self.knowledge.list_credit_risk_events(company["id"], limit=20)
+        policy_project_events = self.knowledge.list_policy_project_events(company["id"], limit=20)
+        supplementary = self.get_supplementary_context(company)
+        resources["ratings"] = {"status": "ready" if ratings else "missing", "count": len(ratings)}
+        resources["bonds"] = {"status": "ready" if bonds else "missing", "count": len(bonds)}
+        resources["credit_events"] = {"status": "ready" if credit_events else "missing", "count": len(credit_events)}
+        resources["policy_project_events"] = {"status": "ready" if policy_project_events else "missing", "count": len(policy_project_events)}
+        resources["supplementary"] = {
+            "status": "ready" if any(supplementary.get(key) for key in ("quote", "ratings", "bonds", "credit_events", "policy_project_events")) else "missing",
+            "quote": bool(supplementary.get("quote")),
+            "ratings": len(supplementary.get("ratings") or []),
+            "bonds": len(supplementary.get("bonds") or []),
+            "credit_events": len(supplementary.get("credit_events") or []),
+            "policy_project_events": len(supplementary.get("policy_project_events") or []),
+        }
         return {"company": company, "resources": resources}
 
     def request_prewarm(self, market: str = "ALL", resources: Optional[list[str]] = None, limit: int = 20) -> list[dict]:
-        allowed = {"financial_dataset", "documents", "encyclopedia"}
+        allowed = {"financial_dataset", "documents", "encyclopedia", "supplementary", "ratings", "bonds", "credit_events", "policy_project_events", "disclosures"}
         requested = [item for item in (resources or ["financial_dataset", "documents"]) if item in allowed]
         jobs = []
         for company in self.top_companies(market)[: max(1, min(limit, 100))]:
@@ -281,6 +318,18 @@ class DataService:
                     self.repository.update_job(job_id, status="RUNNING", progress=min(90, 15 + index * 70 // max(1, len(documents))))
             elif resource_type == "encyclopedia":
                 self.get_encyclopedia(company, force=True)
+            elif resource_type == "supplementary":
+                self.get_supplementary_context(company, force=True)
+            elif resource_type == "ratings":
+                self.rating_context(company, force=True)
+            elif resource_type == "bonds":
+                self.ingestion.ingest_supplementary(company, source_types=["bond"], force=True)
+            elif resource_type == "credit_events":
+                self.credit_event_context(company, force=True)
+            elif resource_type == "policy_project_events":
+                self.policy_project_context(company, force=True)
+            elif resource_type == "disclosures":
+                self.list_disclosure_reports(company, force=True)
             elif resource_type == "company_profile":
                 self.repository.delete_snapshots("company_profile", company["id"])
             else:
@@ -291,24 +340,11 @@ class DataService:
 
     def _fetch_profile_document_index(self, company: dict) -> list[dict]:
         if company["market"] == "CN":
-            documents = [item for item in self.ashare_source.list_reports(company) if item["report_type"] == "annual"]
-            try:
-                documents.extend(self.ashare_source.cninfo.list_prospectuses(company)[:1])
-            except Exception:
-                pass
-            for item in documents:
-                item.update({"market": "CN", "source_platform": "CNINFO"})
-            return documents
-        items = []
-        for source in self.sec_client.list_filing_documents(company["cik"]):
-            form = source.get("form") or "SEC filing"
-            report_type = "annual" if form in {"10-K", "20-F"} else ("prospectus" if form in {"S-1", "F-1"} else "quarterly")
-            if report_type not in {"annual", "prospectus"} or not source.get("url"):
-                continue
-            year = str(source.get("report_date") or source.get("filing_date") or "")[:4]
-            period = "%s-FY" % year if report_type == "annual" else "%s-PROSPECTUS" % year
-            items.append({"id": "SEC-%s-%s-%s" % (company["ticker"], period, source["accession"]), "company_id": company["id"], "report_type": report_type, "period": period, "publish_date": source.get("filing_date"), "source_url": source["url"], "title": "%s %s %s" % (company["name"], period, form), "form": form, "source_platform": "SEC EDGAR", "market": "US"})
-        return sorted(items, key=lambda item: item["period"], reverse=True)
+            return [item for item in self.ingestion.ingest_documents(company, "filing", limit=30) if item.get("report_type") in {"annual", "prospectus"}]
+        if company["market"] == "HK":
+            return [item for item in self.ingestion.ingest_documents(company, "filing", limit=30) if item.get("report_type") in {"annual", "prospectus"}]
+        items = self.ingestion.ingest_documents(company, "filing", limit=40)
+        return sorted([item for item in items if item.get("report_type") in {"annual", "prospectus"}], key=lambda item: item["period"], reverse=True)
 
     def list_financial_documents(self, company: dict, annual: list[str], quarterly: list[str]) -> list[dict]:
         existing = {item["period"]: item for item in self.repository.list_documents(company["id"])}
@@ -324,7 +360,8 @@ class DataService:
     def _store_financial_documents(self, company: dict, dataset: dict) -> None:
         for period, record in dataset.get("records", {}).items():
             source = _filing_for_record(record, dataset.get("filings", {}))
-            document = {"id": "%s-%s" % (company["id"], period), "company_id": company["id"], "report_type": "annual" if period.endswith("-FY") else "quarterly", "period": period, "publish_date": source.get("filing_date") or record.get("filed"), "source_url": source.get("url"), "parse_status": "structured", "source_platform": "SEC EDGAR" if company["market"] == "US" else "CNINFO", "market": company["market"], "form": source.get("form") or record.get("form")}
+            source_platform = "SEC EDGAR" if company["market"] == "US" else ("HKEX" if company["market"] == "HK" else "CNINFO")
+            document = {"id": "%s-%s" % (company["id"], period), "company_id": company["id"], "report_type": "annual" if period.endswith("-FY") else "quarterly", "period": period, "publish_date": source.get("filing_date") or record.get("filed"), "source_url": source.get("url"), "parse_status": "structured", "source_platform": source_platform, "market": company["market"], "form": source.get("form") or record.get("form")}
             self.repository.upsert_document(document)
             self._sync_canonical_document(document)
 
@@ -367,7 +404,8 @@ class DataService:
                 rejected.append({"period": period, "reasons": reasons})
         if not valid_records and dataset.get("records"):
             detail = "；".join("%s：%s" % (item["period"], "、".join(item["reasons"])) for item in rejected[:3])
-            raise ValueError("A 股 PDF 数据质量校验未通过，已阻止生成不可靠分析。%s" % detail)
+            market_label = {"CN": "A 股", "HK": "港股"}.get(company.get("market"), company.get("market") or "该市场")
+            raise ValueError("%s财务数据质量校验未通过，已阻止生成不可靠分析。%s" % (market_label, detail))
         return {"records": valid_records, "filings": dataset.get("filings", {}), "rejected_periods": rejected}
 
     def _remember_company(self, company: dict) -> dict:
@@ -471,9 +509,25 @@ class DataService:
     def knowledge_blocks(self, company: dict, query: str = "", limit: int = 20) -> list[dict]:
         direct = self.knowledge.list_blocks(company["id"], query, limit) if query else []
         if direct or not query:
-            return direct or self.knowledge.list_blocks(company["id"], "", limit)
+            existing = direct or self.knowledge.list_blocks(company["id"], "", limit)
+            if existing:
+                return existing
+            for document in self.list_profile_documents(company)[:3]:
+                self.materialize_document(document)
+            return self.knowledge.list_blocks(company["id"], query, limit)
         merged = []
         seen = set()
+        for term in _knowledge_terms(query):
+            for item in self.knowledge.list_blocks(company["id"], term, limit):
+                if item["block_id"] not in seen:
+                    merged.append(item)
+                    seen.add(item["block_id"])
+                if len(merged) >= limit:
+                    return merged
+        if merged:
+            return merged
+        for document in self.list_profile_documents(company)[:3]:
+            self.materialize_document(document)
         for term in _knowledge_terms(query):
             for item in self.knowledge.list_blocks(company["id"], term, limit):
                 if item["block_id"] not in seen:
@@ -488,7 +542,50 @@ class DataService:
         return self.knowledge.list_document_blocks(document["id"])
 
     def knowledge_financial_facts(self, company: dict, periods: Optional[list[str]] = None) -> list[dict]:
+        facts = self.knowledge.list_financial_facts(company["id"], periods, validated_only=False)
+        if facts:
+            return facts
+        self.get_financial_dataset(company, periods=periods)
         return self.knowledge.list_financial_facts(company["id"], periods, validated_only=False)
+
+    def get_supplementary_context(self, company: dict, force: bool = False) -> dict:
+        company = self.ensure_complete_company(company)
+        return self.ingestion.supplementary_context(company, force=force)
+
+    def supplementary_disclosures(self, company: dict, force: bool = False) -> list[dict]:
+        company = self.ensure_complete_company(company)
+        if force:
+            self.list_disclosure_reports(company, force=True)
+        return [
+            item for item in self.repository.list_documents(company["id"])
+            if item.get("source_id") in {"sse", "szse", "bse"} or item.get("source_platform") in {"上交所", "深交所", "北交所"}
+        ]
+
+    def rating_context(self, company: dict, force: bool = False) -> list[dict]:
+        company = self.ensure_complete_company(company)
+        if force or not self.knowledge.list_rating_facts(company["id"], limit=1):
+            self.ingestion.ingest_supplementary(company, source_types=["rating"], force=force)
+        return self.knowledge.list_rating_facts(company["id"], limit=20)
+
+    def credit_event_context(self, company: dict, force: bool = False) -> list[dict]:
+        company = self.ensure_complete_company(company)
+        if force or not self.knowledge.list_credit_risk_events(company["id"], limit=1):
+            self.ingestion.ingest_supplementary(company, source_types=["credit_event"], force=force)
+        return self.knowledge.list_credit_risk_events(company["id"], limit=20)
+
+    def policy_project_context(self, company: dict, force: bool = False) -> list[dict]:
+        company = self.ensure_complete_company(company)
+        if company.get("market") != "CN":
+            return []
+        if force or not self.knowledge.list_policy_project_events(company["id"], limit=1):
+            self.ingestion.ingest_supplementary(company, source_types=["policy_project_event"], force=force)
+        return self.knowledge.list_policy_project_events(company["id"], limit=20)
+
+    def source_status(self) -> dict:
+        return {
+            "sources": self.source_registry.list_sources(),
+            "health": self.source_registry.healthcheck_all(),
+        }
 
     def persist_company_facts(self, company: dict, profile: dict, evidences: dict, extractor_version: str) -> None:
         def block_ids(refs):
@@ -523,6 +620,10 @@ def _merge_dataset(old: dict, fresh: dict) -> dict:
     return {"records": {**old.get("records", {}), **fresh.get("records", {})}, "filings": {**old.get("filings", {}), **fresh.get("filings", {})}}
 
 
+def _unique_periods(periods: list[str]) -> list[str]:
+    return list(dict.fromkeys(period for period in periods if period))
+
+
 def _filing_for_record(record: dict, filings: dict) -> dict:
     for accession in record.get("sources", []):
         if accession in filings:
@@ -536,6 +637,16 @@ def _expiry(delta: timedelta) -> str:
 
 def _expired(value: Optional[str]) -> bool:
     return bool(value and value <= utc_now())
+
+
+def _extension_for_content_type(content_type: str) -> str:
+    if content_type == "application/pdf":
+        return ".pdf"
+    if content_type == "text/html":
+        return ".html"
+    if content_type == "application/json":
+        return ".json"
+    return ".txt"
 
 
 def _market(value: str) -> str:

@@ -6,7 +6,7 @@ from typing import Optional
 from backend.company_profile.llm_client import ModelProviderClient
 
 
-PROMPT_VERSION = "financial_agent_v4"
+PROMPT_VERSION = "financial_agent_v7"
 
 
 class FinancialAnalysisAgent:
@@ -15,7 +15,7 @@ class FinancialAnalysisAgent:
     def __init__(self, llm_client: Optional[ModelProviderClient] = None):
         self.llm_client = llm_client or ModelProviderClient()
 
-    def analyze(self, company: dict, facts: list[dict], blocks: list[dict], period_type: str, periods: list[str]) -> dict:
+    def analyze(self, company: dict, facts: list[dict], blocks: list[dict], period_type: str, periods: list[str], supplementary: Optional[dict] = None) -> dict:
         if not self.llm_client.available:
             return self._unavailable("未配置 %s 的 API Key。" % self.llm_client.provider.upper())
         allowed_ids = {item["block_id"] for item in blocks}
@@ -51,7 +51,7 @@ class FinancialAnalysisAgent:
             else:
                 coverage_gaps.append("%s 未能从披露证据中抽取可验证观察。" % period)
         interpretation_payload = self._chat_chinese_json(
-            _analysis_system(), _analysis_prompt(company, facts, observations, period_type, periods), timeout=120
+            _analysis_system(), _analysis_prompt(company, facts, observations, period_type, periods, supplementary or {}), timeout=120
         )
         if not interpretation_payload:
             return self._unavailable("财务趋势分析阶段未返回有效 JSON。", observations, risk_facts)
@@ -68,6 +68,7 @@ class FinancialAnalysisAgent:
             "cash_flow_analysis": _texts(interpretation_payload.get("cash_flow_analysis")),
             "balance_sheet_analysis": _texts(interpretation_payload.get("balance_sheet_analysis")),
             "industry_position": _texts(interpretation_payload.get("industry_position")),
+            "supplementary_insights": _texts(interpretation_payload.get("supplementary_insights")),
             "uncertainties": _texts(interpretation_payload.get("uncertainties")) + coverage_gaps,
             "observations": observations,
             "risk_facts": risk_facts,
@@ -106,12 +107,13 @@ def _facts_prompt(company, facts, blocks) -> str:
 
 
 def _analysis_system() -> str:
-    return "你是财报趋势分析 Agent。只能依据输入的财务事实与已抽取 observations 输出 JSON。区分事实与解释；无法确认时写入 uncertainties；禁止投资建议。所有 financial_summary、trend_analysis、earnings_quality、cash_flow_analysis、balance_sheet_analysis、industry_position、uncertainties 的文本必须使用简体中文。英文财报仅供理解，不能直接输出英文句子；专有名词可在中文句子中保留原文。"
+    return "你是财报趋势分析 Agent。只能依据输入的财务事实、已抽取 observations 与统一补充数据输出 JSON。补充数据可能包括行情、评级机构评级、债券和债务融资披露、信用平台或交易场所信用事件、政策与项目线索；这些数据只能作为信用质量、融资压力、非财务风险、外部政策和项目环境的辅助判断，不能替代财报事实，不能把评级、处罚、债券、政策、项目或行情写成营业收入、利润、现金流等财务指标。政策与项目线索只能使用谨慎措辞，不能表述为确定性利好或订单收入。若来源不足，必须写入 uncertainties 或 supplementary_insights 中的谨慎表述。区分事实与解释；禁止投资建议。所有 financial_summary、trend_analysis、earnings_quality、cash_flow_analysis、balance_sheet_analysis、industry_position、supplementary_insights、uncertainties 的文本必须使用简体中文。英文财报仅供理解，不能直接输出英文句子；专有名词可在中文句子中保留原文。"
 
 
-def _analysis_prompt(company, facts, observations, period_type, periods) -> str:
-    schema = {"financial_summary": "", "trend_analysis": [], "earnings_quality": [], "cash_flow_analysis": [], "balance_sheet_analysis": [], "industry_position": [], "uncertainties": []}
-    return "公司：%s\n期间类型：%s；选择期间：%s\n财务事实：%s\n披露观察：%s\n输出 Schema：%s" % (company.get("name"), period_type, periods, json.dumps(facts, ensure_ascii=False), json.dumps(observations, ensure_ascii=False), json.dumps(schema, ensure_ascii=False))
+def _analysis_prompt(company, facts, observations, period_type, periods, supplementary) -> str:
+    schema = {"financial_summary": "", "trend_analysis": [], "earnings_quality": [], "cash_flow_analysis": [], "balance_sheet_analysis": [], "industry_position": [], "supplementary_insights": [], "uncertainties": []}
+    guidance = "补充数据使用要求：ratings 仅用于信用质量辅助判断，若多家评级机构一致可作为信用稳定性佐证，若不一致需说明评级分歧；bonds 仅用于融资和偿债压力辅助判断，债券、债权融资计划、CRMW/CLN 等不得替代财报负债数据；credit_events 仅用于非财务风险红旗，包括信用平台、评级机构和交易场所事件；policy_project_events 仅用于外部政策与项目环境参考，只能在 supplementary_insights 或 uncertainties 中谨慎引用，A 类表示直接公司/项目线索，B 类表示行业政策背景，不能推导收入、利润、现金流、订单或确定性增长；quote 仅用于市场参考。财务趋势、盈利质量、现金流和资产负债表结论必须优先依据财务事实。"
+    return "公司：%s\n期间类型：%s；选择期间：%s\n财务事实：%s\n披露观察：%s\n补充数据：%s\n%s\n输出 Schema：%s" % (company.get("name"), period_type, periods, json.dumps(facts, ensure_ascii=False), json.dumps(observations, ensure_ascii=False), json.dumps(supplementary or {}, ensure_ascii=False), guidance, json.dumps(schema, ensure_ascii=False))
 
 
 def _risk_system() -> str:

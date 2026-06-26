@@ -3,166 +3,201 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>财报掘金</title>
+    <title>财报洞察 - 财报掘金</title>
     <link rel="stylesheet" href="./fm-ui.css?v=20260625-2" />
-    <link rel="stylesheet" href="./styles.css?v=20260625-5" />
+    <link rel="stylesheet" href="./styles.css?v=20260626-2" />
   </head>
   <body>
-    <main class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">财</div>
-          <div>
-            <h1>财报掘金</h1>
-            <p>普通人的财报分析师</p>
-          </div>
+    <main class="insight-shell">
+      <nav class="insight-nav">
+        <a class="insight-brand" href="./home.html" aria-label="返回财报掘金主页">
+          <span class="brand-mark">财</span>
+          <span>
+            <strong>财报掘金</strong>
+            <small>普通人的财报分析师</small>
+          </span>
+        </a>
+        <div class="insight-nav-links">
+          <a href="./home.html">首页</a>
+          <a href="./support.html">支持公司</a>
+          <a href="#extraPanel">资料来源</a>
         </div>
+      </nav>
 
-        <section class="panel compact">
-          <div class="section-title">
-            <h2>当前公司</h2>
-            <span id="backendStatus">后端检测中</span>
-          </div>
-          <div class="selected-company">
-            <strong id="sidebarCompanyName">等待载入</strong>
-            <small id="sidebarCompanyMeta">请从主页输入股票代码进入分析。</small>
-          </div>
-          <div class="service-links">
-            <a class="support-link" href="./home.html">返回主页</a>
-            <a class="support-link" href="./support.html">查看支持公司</a>
-          </div>
-        </section>
-
-        <section class="panel compact">
-          <div class="section-title">
-            <h2>报告期选择</h2>
-            <span>年报 / 季报</span>
-          </div>
-          <div class="segmented">
-            <button id="annualButton" type="button" class="segment active">年报</button>
-            <button id="quarterlyButton" type="button" class="segment">季报</button>
-          </div>
-          <label for="periodSelect">可多选年份或季度</label>
-          <select id="periodSelect" multiple></select>
-          <button id="onlineAnalyzeButton" type="button" class="full-button">联网获取并分析</button>
-          <button id="watchButton" type="button" class="full-button tertiary">加入自选</button>
-        </section>
-
-        <section class="panel compact disclaimer">
-          本产品仅用于财报信息理解和研究辅助，不构成任何投资建议。投资有风险，决策需谨慎。
-        </section>
-      </aside>
-
-      <section class="workspace">
-        <nav class="tabs">
-          <button class="tab active" data-view="overview">财报卡片</button>
-          <button class="tab" data-view="industry">行业对比</button>
-          <button class="tab" data-view="reports">资料来源</button>
-          <button class="tab" data-view="learning">指标解释</button>
-          <button class="tab" data-view="watchlist">自选跟踪</button>
-        </nav>
-
-        <header id="overviewView" class="topbar">
-          <div>
-            <p id="reportPeriod" class="eyebrow">报告期载入中</p>
-            <h2 id="companyTitle">正在载入公司</h2>
-          </div>
-          <div id="stanceBadge" class="stance-badge neutral">中性</div>
-        </header>
-
-        <section class="hero-summary">
-          <div>
-            <p class="eyebrow">一句话总结</p>
-            <h3 id="oneLineSummary">正在读取公开披露数据、校验财务事实，并生成通俗分析...</h3>
-          </div>
-          <div class="score-box">
-            <span id="healthScore">--</span>
-            <small>财报健康度</small>
-          </div>
-        </section>
-
-        <section class="grid metrics-grid" id="metricsGrid"></section>
-
-        <section class="two-column">
-          <article class="panel">
+      <div class="insight-layout">
+        <aside class="insight-sidebar">
+          <section class="side-card side-intro">
             <div class="section-title">
-              <h2>普通人版财报卡片</h2>
-              <span id="sourceTag">Demo 数据</span>
+              <h2>财报洞察</h2>
+              <span id="backendStatus">后端检测中</span>
             </div>
-            <div id="reportCard" class="report-card"></div>
-          </article>
+            <p>输入股票代码，自动读取公开披露数据，用普通话解释公司赚钱能力、现金流质量和关键风险。</p>
+          </section>
 
-          <article class="panel">
+          <section class="side-card">
             <div class="section-title">
-              <h2>风险雷达</h2>
-              <span>规则识别</span>
+              <h2>搜索公司</h2>
+              <span id="companyMarket">待识别</span>
             </div>
-            <div id="riskRadar" class="risk-list"></div>
-          </article>
-        </section>
+            <label for="sidebarSearchInput">股票代码或公司名</label>
+            <div class="side-search-row">
+              <input id="sidebarSearchInput" type="text" placeholder="如 AAPL / 600519 / BIDU" />
+              <button id="sidebarSearchButton" type="button">分析</button>
+            </div>
+            <p id="sidebarSearchMessage" class="side-hint">从主页进入时会自动带入股票代码。</p>
+            <div class="selected-company">
+              <strong id="sidebarCompanyName">等待输入</strong>
+              <small id="sidebarCompanyMeta">请输入股票代码开始分析。</small>
+            </div>
+          </section>
 
-        <section class="two-column">
-          <article class="panel">
+          <section class="side-card">
             <div class="section-title">
-              <h2>多期对比</h2>
-              <span>年报 / 季报</span>
+              <h2>报告期选择</h2>
+              <span>默认最近两期</span>
             </div>
-            <div id="periodCompare" class="peer-table"></div>
-          </article>
+            <div class="segmented">
+              <button id="annualButton" type="button" class="segment active">年报</button>
+              <button id="quarterlyButton" type="button" class="segment">季报</button>
+            </div>
+            <label for="periodSelect">可多选年份或季度</label>
+            <select id="periodSelect" multiple></select>
+            <button id="onlineAnalyzeButton" type="button" class="full-button">联网获取并分析</button>
+          </section>
 
-          <article class="panel qa-panel">
+          <section class="side-card">
             <div class="section-title">
-              <h2>财报问答</h2>
-              <span>带依据回答</span>
+              <h2>最近分析</h2>
+              <span>演示入口</span>
             </div>
-            <div id="chatLog" class="chat-log"></div>
-            <div class="qa-input-row">
-              <input id="questionInput" type="text" placeholder="问：现金流怎么样？有没有风险？" />
-              <button id="askButton" type="button">提问</button>
-            </div>
-          </article>
-        </section>
+            <div id="recentAnalyses" class="recent-list"></div>
+          </section>
 
-        <section id="industryView" class="panel hidden view-section">
-          <div class="section-title">
-            <h2>行业对比</h2>
-            <button id="industryAnalyzeButton" type="button" class="ghost-button">生成对比</button>
-          </div>
-          <p id="industryInsight" class="muted-line">选择公司后可生成同行横向比较。</p>
-          <div id="industryCompare" class="peer-table"></div>
-        </section>
-
-        <section id="reportsView" class="panel hidden view-section">
-          <div class="section-title">
-            <h2>资料来源</h2>
-            <button id="refreshReportsButton" type="button" class="ghost-button">刷新列表</button>
-          </div>
-          <div id="reportList" class="source-list"></div>
-        </section>
-
-        <section id="learningView" class="panel hidden view-section">
-          <div class="section-title">
-            <h2>指标解释</h2>
-            <span>点击指标卡片也可追问</span>
-          </div>
-          <div id="metricDictionary" class="dictionary-grid"></div>
-        </section>
-
-        <section id="watchlistView" class="panel hidden view-section">
-          <div class="section-title">
-            <h2>自选跟踪</h2>
-            <div class="button-group">
-              <button id="addAlertButton" type="button" class="ghost-button">创建提醒</button>
+          <section class="side-card">
+            <div class="section-title">
+              <h2>自选跟踪</h2>
               <button id="refreshWatchlistButton" type="button" class="ghost-button">刷新</button>
             </div>
-          </div>
-          <div id="watchlist" class="source-list"></div>
-          <div id="alertList" class="source-list alert-list"></div>
+            <button id="watchButton" type="button" class="full-button tertiary">加入自选</button>
+            <div id="watchlist" class="source-list compact-list"></div>
+            <button id="addAlertButton" type="button" class="ghost-button full-ghost">创建提醒</button>
+            <div id="alertList" class="source-list alert-list compact-list"></div>
+          </section>
+
+          <section class="side-card disclaimer">
+            本产品仅用于财报信息理解和研究辅助，不构成任何投资建议。投资有风险，决策需谨慎。
+          </section>
+        </aside>
+
+        <section class="insight-main">
+          <header id="overviewView" class="company-card">
+            <div class="company-main">
+              <p id="reportPeriod" class="eyebrow">等待分析</p>
+              <h1 id="companyTitle">请输入股票代码开始分析</h1>
+              <p id="oneLineSummary" class="company-summary">系统会自动读取披露资料，生成财务指标、AI 体检报告和可追问的问答结果。</p>
+              <div class="company-tags">
+                <span id="sourceTag">等待数据</span>
+                <span id="companyIndustry">行业待识别</span>
+              </div>
+            </div>
+            <div class="company-score">
+              <div id="stanceBadge" class="stance-badge neutral">待分析</div>
+              <strong id="healthScore">--</strong>
+              <small>财报健康度</small>
+            </div>
+            <div class="market-mini">
+              <div><span>市盈率</span><strong id="peValue">--</strong></div>
+              <div><span>市净率</span><strong id="pbValue">--</strong></div>
+              <div><span>市值</span><strong id="marketCapValue">--</strong></div>
+            </div>
+          </header>
+
+          <section class="grid metrics-grid" id="metricsGrid"></section>
+
+          <section class="report-qa-grid">
+            <article class="panel ai-report-card">
+              <div class="section-title">
+                <h2>AI 财报体检报告</h2>
+                <span>事实与推断分离</span>
+              </div>
+              <div id="reportCard" class="report-card"></div>
+            </article>
+
+            <article class="panel qa-card">
+              <div class="section-title">
+                <h2>财报问答</h2>
+                <span>带依据回答</span>
+              </div>
+              <div id="suggestedQuestions" class="question-chips"></div>
+              <div id="chatLog" class="chat-log"></div>
+              <div class="qa-input-row">
+                <input id="questionInput" type="text" placeholder="问：现金流怎么样？有没有风险？" />
+                <button id="askButton" type="button">提问</button>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel trend-card">
+            <div class="section-title">
+              <h2>关键指标趋势</h2>
+              <span>多期对比</span>
+            </div>
+            <div id="trendCharts" class="trend-grid"></div>
+          </section>
+
+          <section id="extraPanel" class="extra-panel">
+            <article class="panel">
+              <div class="section-title">
+                <h2>多期对比明细</h2>
+                <span>年报 / 季报</span>
+              </div>
+              <div id="periodCompare" class="peer-table"></div>
+            </article>
+
+            <article class="panel">
+              <div class="section-title">
+                <h2>风险雷达</h2>
+                <span>Agent 识别</span>
+              </div>
+              <div id="riskRadar" class="risk-list"></div>
+            </article>
+
+            <article id="industryView" class="panel view-section">
+              <div class="section-title">
+                <h2>行业对比</h2>
+                <button id="industryAnalyzeButton" type="button" class="ghost-button">生成对比</button>
+              </div>
+              <p id="industryInsight" class="muted-line">选择公司后可生成同行横向比较。</p>
+              <div id="industryCompare" class="peer-table"></div>
+            </article>
+
+            <article id="reportsView" class="panel view-section">
+              <div class="section-title">
+                <h2>资料来源</h2>
+                <button id="refreshReportsButton" type="button" class="ghost-button">刷新列表</button>
+              </div>
+              <div id="reportList" class="source-list"></div>
+            </article>
+
+          </section>
         </section>
-      </section>
+      </div>
+
+      <div id="metricPopover" class="metric-popover hidden" role="dialog" aria-modal="false" aria-labelledby="metricPopoverTitle">
+        <button id="metricPopoverClose" type="button" class="metric-popover-close" aria-label="关闭指标解释">×</button>
+        <p id="metricPopoverEyebrow" class="metric-popover-eyebrow">指标解释</p>
+        <h3 id="metricPopoverTitle"></h3>
+        <p id="metricPopoverPlain"></p>
+        <div id="metricPopoverCurrent" class="metric-popover-current"></div>
+        <div id="metricFormulaBlock" class="metric-formula hidden"></div>
+        <div class="metric-popover-actions">
+          <button id="metricAskButton" type="button">追问这个指标</button>
+          <button id="metricFormulaButton" type="button" class="ghost-button">查看计算口径</button>
+        </div>
+      </div>
     </main>
 
-    <script src="./fm-ui.js?v=20260625-2"></script>
-    <script src="./app.js?v=20260625-5"></script>
+    <script src="./fm-ui.js?v=20260626-3"></script>
+    <script src="./app.js?v=20260626-2"></script>
   </body>
 </html>

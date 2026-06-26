@@ -32,6 +32,59 @@ def data_status(ticker: str, market: str = "US", svc=Depends(services)):
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@router.get("/sources")
+def data_sources(svc=Depends(services)):
+    try:
+        return svc.data_service.source_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/supplementary")
+def supplementary_context(ticker: str, market: str = "US", force: bool = False, svc=Depends(services)):
+    try:
+        company = svc.company_service.resolve(ticker, market)
+        return {"company": company, "context": svc.data_service.get_supplementary_context(company, force=force)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/disclosures")
+def supplementary_disclosures(ticker: str, market: str = "US", force: bool = False, svc=Depends(services)):
+    try:
+        company = svc.company_service.resolve(ticker, market)
+        return {"company": company, "items": svc.data_service.supplementary_disclosures(company, force=force)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/ratings")
+def rating_context(ticker: str, market: str = "US", force: bool = False, svc=Depends(services)):
+    try:
+        company = svc.company_service.resolve(ticker, market)
+        return {"company": company, "items": svc.data_service.rating_context(company, force=force)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/credit-events")
+def credit_event_context(ticker: str, market: str = "US", force: bool = False, svc=Depends(services)):
+    try:
+        company = svc.company_service.resolve(ticker, market)
+        return {"company": company, "items": svc.data_service.credit_event_context(company, force=force)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/policy-project-events")
+def policy_project_context(ticker: str, market: str = "US", force: bool = False, svc=Depends(services)):
+    try:
+        company = svc.company_service.resolve(ticker, market)
+        return {"company": company, "items": svc.data_service.policy_project_context(company, force=force)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.post("/refresh")
 def refresh_data(request: RefreshRequest, svc=Depends(services)):
     try:

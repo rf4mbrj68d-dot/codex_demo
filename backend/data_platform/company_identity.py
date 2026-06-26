@@ -21,6 +21,8 @@ def missing_identity_fields(company: dict) -> list[str]:
         return [] if cik.isdigit() else ["cik"]
     if market == "CN":
         return [] if str(company.get("ticker") or "").strip() else ["ticker"]
+    if market == "HK":
+        return [] if str(company.get("ticker") or "").strip() else ["ticker"]
     return ["market"]
 
 

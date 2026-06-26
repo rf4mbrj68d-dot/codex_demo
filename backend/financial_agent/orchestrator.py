@@ -54,7 +54,8 @@ class FinancialAnalysisOrchestrator:
                 self.data_service.materialize_document(document)
             facts = [item for item in self.data_service.knowledge_financial_facts(company, selected) if item.get("quality_status") == "validated"]
             blocks = _balanced_document_blocks(self.data_service, documents[:3], 60)
-            fingerprint = json_hash({"company": company["id"], "period_type": period_type, "periods": selected, "facts": facts, "blocks": [{"id": item["block_id"], "text": item.get("text", "")} for item in blocks], "agent": PROMPT_VERSION})
+            supplementary = self.data_service.get_supplementary_context(company)
+            fingerprint = json_hash({"company": company["id"], "period_type": period_type, "periods": selected, "facts": facts, "blocks": [{"id": item["block_id"], "text": item.get("text", "")} for item in blocks], "supplementary": supplementary, "agent": PROMPT_VERSION})
             cached = self.data_service.knowledge.get_completed_model_run("financial_analysis", fingerprint)
             if cached and cached.get("output"):
                 result = cached["output"]
@@ -63,7 +64,7 @@ class FinancialAnalysisOrchestrator:
                 task.update({"status": "EXTRACTING_FACTS", "progress": 55, "current_step": "正在由 DeepSeek 抽取财务与经营事实"})
                 self.data_service.knowledge.start_model_run({"run_id": run_id, "company_id": company["id"], "run_type": "financial_analysis", "input_fingerprint": fingerprint, "model_provider": self.agent.llm_client.provider, "model_name": self.agent.llm_client.model, "prompt_version": PROMPT_VERSION, "status": "RUNNING", "created_at": utc_now()})
                 task.update({"status": "ANALYZING_TRENDS", "progress": 72, "current_step": "正在分析趋势、利润质量与现金流"})
-                result = self.agent.analyze(company, facts, blocks, period_type, selected)
+                result = self.agent.analyze(company, facts, blocks, period_type, selected, supplementary)
                 task.update({"status": "ASSESSING_RISKS", "progress": 88, "current_step": "正在评估风险关注程度"})
                 self.data_service.knowledge.finish_model_run(run_id, "COMPLETED", result)
                 result.setdefault("generation_meta", {})["cache_status"] = "MISS"
@@ -98,18 +99,21 @@ def _merge(base, agent_result, analysis_id, company, periods):
         + agent_result.get("cash_flow_analysis", [])
         + agent_result.get("balance_sheet_analysis", [])
     )
+    supplementary_insights = agent_result.get("supplementary_insights", [])
     unavailable_risks = [{
         "name": "Agent 分析状态",
         "level": "yellow",
         "reason": agent_result.get("financial_summary") or "模型服务暂不可用，尚未生成风险等级评估。",
     }]
+    risks = agent_risks if agent_result.get("status") == "completed" and agent_risks else base.get("risks") or unavailable_risks
     return {**base, "analysis_id": analysis_id, "company": company, "selected_periods": periods,
             "agent_analysis": agent_result,
             "summary": agent_result.get("financial_summary") or "披露资料不足，暂无法生成财报 Agent 结论。",
             "trend_insights": agent_result.get("trend_analysis", []),
-            "risks": agent_risks if agent_result.get("status") == "completed" else unavailable_risks,
+            "risks": risks,
             "business_model": "；".join(business_claims[:2]) or "未从已选披露材料中抽取到可验证的业务驱动信息。",
-            "highlights": agent_result.get("trend_analysis", [])[:3],
+            "highlights": (agent_result.get("trend_analysis", []) + supplementary_insights)[:3],
+            "supplementary_insights": supplementary_insights,
             "watch_metrics": agent_result.get("uncertainties", [])[:3] or ["后续报告期的收入、利润和经营现金流"],
             "fact_opinion": {
                 "facts": observation_claims[:5],

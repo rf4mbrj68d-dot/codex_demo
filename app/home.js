@@ -15,7 +15,7 @@ const moreHotButton = document.querySelector("#moreHotButton");
 const fallbackHotCompanies = [
   { ticker: "AAPL", name: "Apple Inc.", market: "US", industry: "消费电子", price: "可分析", change: "" },
   { ticker: "600519", name: "贵州茅台", market: "CN", industry: "食品饮料", price: "可分析", change: "" },
-  { ticker: "300750", name: "宁德时代", market: "CN", industry: "电力设备", price: "可分析", change: "" }
+  { ticker: "00700", name: "腾讯控股", market: "HK", industry: "互联网", price: "可分析", change: "" }
 ];
 
 function boot() {
@@ -105,7 +105,7 @@ async function loadHotCompanies() {
 }
 
 function normalizeHotCompanies(items) {
-  const preferred = ["AAPL", "600519", "300750", "NVDA", "BIDU", "000001"];
+  const preferred = ["AAPL", "600519", "00700", "300750", "NVDA", "BIDU", "000001"];
   const ranked = [...items].sort((a, b) => {
     const ai = preferred.indexOf(a.ticker);
     const bi = preferred.indexOf(b.ticker);
@@ -245,11 +245,13 @@ function toFinancialUrl(ticker, market) {
 
 function inferMarket(value) {
   if (UI.inferMarket) return UI.inferMarket(value, "US");
-  return /^\d{6}$/.test(String(value || "").trim()) ? "CN" : "US";
+  const text = String(value || "").trim().toUpperCase();
+  if (/^\d{1,5}(\.HK)?$/.test(text)) return "HK";
+  return /^\d{6}$/.test(text) ? "CN" : "US";
 }
 
 function marketLabel(market) {
-  return market === "CN" ? "A股" : market === "US" ? "美股" : market || "市场";
+  return market === "CN" ? "A股" : market === "US" ? "美股" : market === "HK" ? "港股" : market || "市场";
 }
 
 function avatarText(name) {

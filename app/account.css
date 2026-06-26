@@ -1484,10 +1484,10 @@ button {
 }
 
 .home-hero h1 {
-  max-width: 860px;
+  max-width: 1120px;
   margin: 18px 0 0;
   color: #0f172a;
-  font-size: clamp(46px, 6vw, 76px);
+  font-size: clamp(44px, 5.2vw, 66px);
   line-height: 1.06;
   letter-spacing: 0;
 }

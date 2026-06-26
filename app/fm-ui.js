@@ -10,7 +10,11 @@
   }
 
   function inferMarket(value, fallback = "US") {
-    return /^\d{6}$/.test(String(value || "").trim()) ? "CN" : fallback;
+    const text = String(value || "").trim().toUpperCase();
+    if (/^\d{1,5}(\.HK)?$/.test(text)) return "HK";
+    if (/^\d{6}$/.test(text)) return "CN";
+    if (/^[A-Z.]+$/.test(text)) return "US";
+    return fallback === "US" ? "ALL" : fallback;
   }
 
   function pageBase() {

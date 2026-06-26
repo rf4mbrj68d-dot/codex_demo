@@ -1,4 +1,5 @@
 const API_BASE = window.location.protocol === "file:" ? "http://localhost:8765" : "";
+const UI = window.FinancialMiningUI || {};
 
 const nodes = {
   coverageGrid: document.querySelector("#coverageGrid"),
@@ -77,7 +78,7 @@ function renderCompanies(items) {
     .map(
       (item) => `
         <tr>
-          <td>${item.market}</td>
+        <td>${marketLabel(item.market)}</td>
           <td><strong>${item.ticker}</strong></td>
           <td>${item.name}</td>
           <td>${item.industry || "待识别行业"}</td>
@@ -87,16 +88,44 @@ function renderCompanies(items) {
               ${(item.abilities || []).map((ability) => `<span class="ability">${ability}</span>`).join("")}
             </div>
           </td>
-          <td>${item.note || ""}</td>
+          <td>
+            <p>${item.note || ""}</p>
+            <button class="support-action" type="button" data-ticker="${escapeHtml(item.ticker)}" data-market="${escapeHtml(item.market)}">查看分析</button>
+          </td>
         </tr>
       `
     )
     .join("");
+  nodes.supportTable.querySelectorAll("[data-ticker]").forEach((button) => {
+    button.addEventListener("click", () => {
+      window.location.href = toFinancialUrl(button.dataset.ticker, button.dataset.market);
+    });
+  });
 }
 
 function statusTag(status) {
   const cls = status === "支持" ? "full" : "partial";
   return `<span class="status ${cls}">${status}</span>`;
+}
+
+function marketLabel(market) {
+  return market === "CN" ? "A股" : market === "US" ? "美股" : market === "HK" ? "港股" : market || "市场";
+}
+
+function toFinancialUrl(ticker, market) {
+  if (UI.toFinancialUrl) return UI.toFinancialUrl(ticker, market);
+  return `${API_BASE}/index.html?${new URLSearchParams({ ticker, market }).toString()}`;
+}
+
+function escapeHtml(value) {
+  if (UI.escapeHtml) return UI.escapeHtml(value);
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
 }
 
 boot();

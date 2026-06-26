@@ -6,6 +6,7 @@ from typing import List
 import requests
 
 from backend.data_sources.ashare_index import AShareIndex
+from backend.data_sources.hk_index import HKIndex
 
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -68,6 +69,7 @@ class SupportCatalog:
         self._sec_cache = None
         self._sec_cache_at = 0.0
         self._ashare_index = AShareIndex()
+        self._hk_index = HKIndex()
 
     def query(self, q: str = "", market: str = "ALL", limit: int = 200) -> dict:
         normalized_market = market.upper()
@@ -76,6 +78,8 @@ class SupportCatalog:
             items.extend(self._query_us(q))
         if normalized_market in {"ALL", "CN", "A"}:
             items.extend(self._query_cn(q))
+        if normalized_market in {"ALL", "HK"}:
+            items.extend(self._query_hk(q))
 
         items = sorted(items, key=lambda item: (item["market"], item["ticker"]))
         return {
@@ -88,7 +92,7 @@ class SupportCatalog:
     def top(self) -> dict:
         us_items = [item for item in self._load_us() if item["ticker"] in TOP_US_TICKERS]
         return {
-            "items": sorted(us_items + self._query_cn("", top=True), key=lambda item: (item["market"], item["ticker"])),
+            "items": sorted(us_items + self._query_cn("", top=True) + self._query_hk("", top=True), key=lambda item: (item["market"], item["ticker"])),
             "coverage": self.coverage(),
         }
 
@@ -96,6 +100,7 @@ class SupportCatalog:
         sec_count = len(self._load_us())
         sec_is_fallback = self._sec_cache == self._fallback_us()
         cn_coverage = self._ashare_index.coverage()
+        hk_coverage = self._hk_index.coverage()
         return {
             "US": {
                 "status": "支持" if not sec_is_fallback else "本地索引可用",
@@ -108,8 +113,15 @@ class SupportCatalog:
                 "status": "支持" if not cn_coverage["using_fallback"] else "本地索引可用",
                 "count": cn_coverage["count"],
                 "source": f"{cn_coverage['source']} + 巨潮资讯公告 PDF",
-                "abilities": ["公司搜索", "巨潮公告", "PDF 解析", "结构化指标", "上传/粘贴分析"],
+                "abilities": ["公司搜索", "巨潮公告", "PDF 解析", "结构化指标", "评级/债券补充", "政策/项目线索"],
                 "note": "覆盖巨潮股票索引中的 A 股公司；报告期可分析性取决于公告 PDF 可下载和解析完整度。",
+            },
+            "HK": {
+                "status": "支持",
+                "count": hk_coverage["count"],
+                "source": "港股头部公司索引 + 港股披露文件适配器",
+                "abilities": ["公司搜索", "年报索引", "PDF 文本入库", "结构化指标", "多期对比"],
+                "note": "V1 覆盖头部港股公司；财务数据集和报告全文由统一知识整理层标准化后供现有页面使用。",
             },
         }
 
@@ -127,6 +139,10 @@ class SupportCatalog:
     def _query_cn(self, q: str, top: bool = False) -> List[dict]:
         items = self._ashare_index.top(limit=80) if top or not q.strip() else self._ashare_index.search(q, limit=300)
         return [_support_cn_item(item) for item in items]
+
+    def _query_hk(self, q: str, top: bool = False) -> List[dict]:
+        items = self._hk_index.top(limit=80) if top or not q.strip() else self._hk_index.search(q, limit=300)
+        return [_support_hk_item(item) for item in items]
 
     def _load_us(self) -> List[dict]:
         if self._sec_cache and time.time() - self._sec_cache_at < 3600:
@@ -202,7 +218,22 @@ def _support_cn_item(item: dict) -> dict:
         "exchange": item.get("exchange"),
         "industry": item.get("industry") or "待识别行业",
         "source": item.get("source") or "巨潮资讯",
-        "abilities": ["公司搜索", "巨潮公告", "PDF 解析", "结构化指标", "上传/粘贴分析"],
+        "abilities": ["公司搜索", "巨潮公告", "PDF 解析", "结构化指标", "评级/债券补充", "政策/项目线索"],
         "status": "支持",
         "note": "支持巨潮资讯公告 PDF 抓取和核心指标解析；解析完整度受公告版式影响。",
+    }
+
+
+def _support_hk_item(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "ticker": item["ticker"],
+        "name": item["name"],
+        "market": "HK",
+        "exchange": item.get("exchange") or "HKEX",
+        "industry": item.get("industry") or "待识别行业",
+        "source": item.get("source") or "HKEX",
+        "abilities": ["公司搜索", "港股年报", "PDF 文本入库", "结构化指标", "多期对比"],
+        "status": "支持",
+        "note": "复用现有财报洞察页；港股财务数据由统一知识整理层标准化后进入 Agent。",
     }

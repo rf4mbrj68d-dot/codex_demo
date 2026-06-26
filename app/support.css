@@ -322,3 +322,11 @@ select:focus {
 .ability {
   background: #f8fafc;
 }
+
+.support-action {
+  min-height: 30px;
+  margin-top: 8px;
+  border-radius: 9px;
+  padding: 0 10px;
+  font-size: 12px;
+}

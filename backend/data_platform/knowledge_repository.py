@@ -127,6 +127,77 @@ class KnowledgeRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_financial_agent_artifacts_company
                     ON financial_agent_artifacts(company_id, artifact_type, created_at DESC);
+                CREATE TABLE IF NOT EXISTS market_quote_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    trade_date TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_quote_company
+                    ON market_quote_snapshots(company_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS rating_facts (
+                    rating_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    agency_name TEXT,
+                    subject_rating TEXT,
+                    rating_outlook TEXT,
+                    rating_action TEXT,
+                    rating_date TEXT,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_rating_facts_company
+                    ON rating_facts(company_id, rating_date DESC);
+                CREATE TABLE IF NOT EXISTS bond_facts (
+                    bond_fact_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    as_of_date TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bond_facts_company
+                    ON bond_facts(company_id, as_of_date DESC);
+                CREATE TABLE IF NOT EXISTS credit_risk_events (
+                    event_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    event_type TEXT,
+                    event_level TEXT,
+                    event_date TEXT,
+                    title TEXT,
+                    authority TEXT,
+                    source_url TEXT,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_credit_risk_events_company
+                    ON credit_risk_events(company_id, event_date DESC, event_level);
+                CREATE TABLE IF NOT EXISTS policy_project_events (
+                    event_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    event_level TEXT,
+                    event_date TEXT,
+                    title TEXT NOT NULL,
+                    authority TEXT,
+                    source_url TEXT,
+                    relevance_level TEXT,
+                    match_confidence REAL,
+                    match_method TEXT,
+                    tags_json TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_policy_project_events_company
+                    ON policy_project_events(company_id, event_date DESC, relevance_level);
+                CREATE INDEX IF NOT EXISTS idx_policy_project_events_source
+                    ON policy_project_events(source_id, event_date DESC);
                 """
             )
 
@@ -325,6 +396,140 @@ class KnowledgeRepository:
             "generation_meta": json.loads(row["generation_meta_json"]), "created_at": row["created_at"],
         } for row in rows]
 
+    def upsert_market_quote(self, company_id: str, source_id: str, payload: dict, expires_at: str | None = None) -> None:
+        now = utc_now()
+        snapshot_id = "%s:%s:%s" % (company_id, source_id, payload.get("trade_date") or "latest")
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO market_quote_snapshots(snapshot_id, company_id, source_id, payload_json, trade_date, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(snapshot_id) DO UPDATE SET payload_json=excluded.payload_json,
+                     trade_date=excluded.trade_date, created_at=excluded.created_at, expires_at=excluded.expires_at""",
+                (snapshot_id, company_id, source_id, json.dumps(payload, ensure_ascii=False), payload.get("trade_date"), now, expires_at),
+            )
+
+    def latest_market_quote(self, company_id: str) -> dict | None:
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT * FROM market_quote_snapshots WHERE company_id = ? ORDER BY created_at DESC LIMIT 1",
+                (company_id,),
+            ).fetchone()
+        return _quote_payload(dict(row)) if row else None
+
+    def upsert_rating_fact(self, company_id: str, source_id: str, payload: dict) -> None:
+        now = utc_now()
+        rating_id = "%s:%s:%s" % (company_id, source_id, payload.get("rating_date") or "latest")
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO rating_facts(rating_id, company_id, source_id, agency_name, subject_rating, rating_outlook, rating_action, rating_date, payload_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(rating_id) DO UPDATE SET agency_name=excluded.agency_name,
+                     subject_rating=excluded.subject_rating, rating_outlook=excluded.rating_outlook,
+                     rating_action=excluded.rating_action, rating_date=excluded.rating_date,
+                     payload_json=excluded.payload_json, created_at=excluded.created_at""",
+                (
+                    rating_id, company_id, source_id, payload.get("agency_name"), payload.get("subject_rating"),
+                    payload.get("rating_outlook"), payload.get("rating_action"), payload.get("rating_date"),
+                    json.dumps(payload, ensure_ascii=False), now,
+                ),
+            )
+
+    def list_rating_facts(self, company_id: str, limit: int = 20) -> list[dict]:
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM rating_facts WHERE company_id = ? ORDER BY rating_date DESC, created_at DESC LIMIT ?",
+                (company_id, limit),
+            ).fetchall()
+        return [_rating_payload(dict(row)) for row in rows]
+
+    def upsert_bond_fact(self, company_id: str, source_id: str, payload: dict) -> None:
+        now = utc_now()
+        bond_fact_id = "%s:%s:%s" % (company_id, source_id, payload.get("as_of_date") or "latest")
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO bond_facts(bond_fact_id, company_id, source_id, payload_json, as_of_date, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(bond_fact_id) DO UPDATE SET payload_json=excluded.payload_json,
+                     as_of_date=excluded.as_of_date, created_at=excluded.created_at""",
+                (bond_fact_id, company_id, source_id, json.dumps(payload, ensure_ascii=False), payload.get("as_of_date"), now),
+            )
+
+    def list_bond_facts(self, company_id: str, limit: int = 20) -> list[dict]:
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM bond_facts WHERE company_id = ? ORDER BY as_of_date DESC, created_at DESC LIMIT ?",
+                (company_id, limit),
+            ).fetchall()
+        return [_bond_payload(dict(row)) for row in rows]
+
+    def upsert_credit_risk_event(self, company_id: str, source_id: str, payload: dict) -> None:
+        now = utc_now()
+        basis = "%s:%s:%s:%s" % (
+            company_id,
+            source_id,
+            payload.get("event_date") or "latest",
+            payload.get("title") or payload.get("event_type") or "event",
+        )
+        event_id = "credit_event_%s" % __import__("hashlib").sha1(basis.encode("utf-8")).hexdigest()[:20]
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO credit_risk_events(event_id, company_id, source_id, event_type, event_level, event_date, title, authority, source_url, payload_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(event_id) DO UPDATE SET event_type=excluded.event_type,
+                     event_level=excluded.event_level, event_date=excluded.event_date, title=excluded.title,
+                     authority=excluded.authority, source_url=excluded.source_url,
+                     payload_json=excluded.payload_json, created_at=excluded.created_at""",
+                (
+                    event_id, company_id, source_id, payload.get("event_type"), payload.get("event_level"),
+                    payload.get("event_date"), payload.get("title"), payload.get("authority"), payload.get("source_url"),
+                    json.dumps(payload, ensure_ascii=False), now,
+                ),
+            )
+
+    def list_credit_risk_events(self, company_id: str, limit: int = 20) -> list[dict]:
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM credit_risk_events WHERE company_id = ? ORDER BY event_date DESC, created_at DESC LIMIT ?",
+                (company_id, limit),
+            ).fetchall()
+        return [_credit_event_payload(dict(row)) for row in rows]
+
+    def upsert_policy_project_event(self, company_id: str, source_id: str, payload: dict) -> None:
+        now = utc_now()
+        basis = "%s:%s:%s:%s" % (
+            company_id,
+            source_id,
+            payload.get("event_date") or "latest",
+            payload.get("title") or payload.get("event_type") or "policy_project",
+        )
+        event_id = "policy_project_%s" % __import__("hashlib").sha1(basis.encode("utf-8")).hexdigest()[:20]
+        with self.store.connect() as db:
+            db.execute(
+                """INSERT INTO policy_project_events(event_id, company_id, source_id, event_type, event_level, event_date, title, authority, source_url, relevance_level, match_confidence, match_method, tags_json, payload_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(event_id) DO UPDATE SET event_type=excluded.event_type,
+                     event_level=excluded.event_level, event_date=excluded.event_date, title=excluded.title,
+                     authority=excluded.authority, source_url=excluded.source_url,
+                     relevance_level=excluded.relevance_level, match_confidence=excluded.match_confidence,
+                     match_method=excluded.match_method, tags_json=excluded.tags_json,
+                     payload_json=excluded.payload_json, created_at=excluded.created_at""",
+                (
+                    event_id, company_id, source_id, payload.get("event_type") or "policy_project",
+                    payload.get("event_level"), payload.get("event_date"), payload.get("title"), payload.get("authority"),
+                    payload.get("source_url"), payload.get("relevance_level"), payload.get("match_confidence"),
+                    payload.get("match_method"), json.dumps(payload.get("tags") or [], ensure_ascii=False),
+                    json.dumps(payload, ensure_ascii=False), now,
+                ),
+            )
+
+    def list_policy_project_events(self, company_id: str, limit: int = 20) -> list[dict]:
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM policy_project_events WHERE company_id = ? ORDER BY event_date DESC, created_at DESC LIMIT ?",
+                (company_id, limit),
+            ).fetchall()
+        return [_policy_project_payload(dict(row)) for row in rows]
+
 
 def _json_or_none(value):
     return json.dumps(value, ensure_ascii=False) if value is not None else None
@@ -363,3 +568,28 @@ def _model_run_payload(row: dict) -> dict:
         "output": json.loads(row["output_json"]) if row.get("output_json") else None,
         "error_message": row["error_message"], "created_at": row["created_at"], "completed_at": row["completed_at"],
     }
+
+
+def _quote_payload(row: dict) -> dict:
+    payload = json.loads(row["payload_json"])
+    return {"source_id": row["source_id"], "created_at": row["created_at"], "expires_at": row["expires_at"], **payload}
+
+
+def _rating_payload(row: dict) -> dict:
+    payload = json.loads(row["payload_json"])
+    return {"rating_id": row["rating_id"], "source_id": row["source_id"], "created_at": row["created_at"], **payload}
+
+
+def _bond_payload(row: dict) -> dict:
+    payload = json.loads(row["payload_json"])
+    return {"bond_fact_id": row["bond_fact_id"], "source_id": row["source_id"], "created_at": row["created_at"], **payload}
+
+
+def _credit_event_payload(row: dict) -> dict:
+    payload = json.loads(row["payload_json"])
+    return {"event_id": row["event_id"], "source_id": row["source_id"], "created_at": row["created_at"], **payload}
+
+
+def _policy_project_payload(row: dict) -> dict:
+    payload = json.loads(row["payload_json"])
+    return {"event_id": row["event_id"], "source_id": row["source_id"], "created_at": row["created_at"], **payload}
